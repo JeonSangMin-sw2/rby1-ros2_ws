@@ -3,6 +3,7 @@
     # RBY1 initialize Information
     robot_ip: "127.0.0.1:50051"
     model: "A"
+    minimum_time: 2 # seconds
     angular_velocity_limit: 4.712388 # 3.141592 * 1.5
     linear_velocity_limit: 1.5
     acceleration_limit: 1.0
