@@ -1,0 +1,16 @@
+/**:
+  ros__parameters:
+    # RBY1 initialize Information
+    robot_ip: "127.0.0.1:50051"
+    model: "A"
+    angular_velocity_limit: 4.712388 # 3.141592 * 1.5
+    linear_velocity_limit: 1.5
+    acceleration_limit: 1.0
+    stop_orientation_tracking_error: 1e-5
+    stop_position_tracking_error: 1e-5
+
+    # topic_name
+    joint_topic_name: "joint_states"
+
+    # additional options
+    fault_reset_trigger: true # 초기화 단계에서 major, minor fault가 뜨면 자동으로 리셋해서 다시 연결하게 할건지
