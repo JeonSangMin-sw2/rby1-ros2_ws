@@ -1,1 +1,0 @@
-namespace rby1_ros2
