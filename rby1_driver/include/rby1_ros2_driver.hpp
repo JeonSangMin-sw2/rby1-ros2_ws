@@ -37,10 +37,19 @@ namespace rby1_ros2{
             bool node_power_off_trigger;
 
             RobotState robot_state_;
+            rb::RobotInfo info_;
             std::shared_ptr<rb::Robot<ModelType>> robot_;
 
             //utility
             std::mutex mutex_;
+
+            //ros2
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr torso_pub_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr right_arm_pub_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr left_arm_pub_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr head_pub_;
+            // Timer for 100Hz publishing
+            rclcpp::TimerBase::SharedPtr joint_state_timer_;
         public:
             RBY1_ROS2_DRIVER();
             ~RBY1_ROS2_DRIVER();
@@ -57,6 +66,9 @@ namespace rby1_ros2{
             // std::vector<double> get_joint_effort(std::string joint_space);
 
         private:
-            void get_parameters();
+            void init_parameter();
+            void resize_joint_states();
+            void categorize_joints();
+            void publish_joint_states();        
     };
 }
