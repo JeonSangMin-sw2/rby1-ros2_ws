@@ -48,6 +48,8 @@ namespace rby1_ros2{
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr right_arm_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr left_arm_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr head_pub_;
+
+            rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr position_sub_;
             // Timer for 100Hz publishing
             rclcpp::TimerBase::SharedPtr joint_state_timer_;
         public:
@@ -62,9 +64,8 @@ namespace rby1_ros2{
 
             bool check_controll_manager();
             void read_joint_state();
-            // std::vector<double> get_joint_velocity(std::string joint_space);
-            // std::vector<double> get_joint_effort(std::string joint_space);
-
+            void position_command(std::string joint_space, std::vector<double> position);
+            void position_command_callback(const sensor_msgs::msg::JointState::SharedPtr msg);
         private:
             void init_parameter();
             void resize_joint_states();

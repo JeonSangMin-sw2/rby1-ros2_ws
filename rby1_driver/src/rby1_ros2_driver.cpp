@@ -1,5 +1,7 @@
 #include "rby1_ros2_driver.hpp"
 namespace rby1_ros2{
+    //using namespace rb;
+
 
     template <typename ModelType>
     RBY1_ROS2_DRIVER<ModelType>::RBY1_ROS2_DRIVER()
@@ -25,6 +27,7 @@ namespace rby1_ros2{
                 left_arm_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/left_arm", 10);
                 head_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/head", 10);
                 
+                position_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(joint_topic_name + "/position_command", 10, std::bind(&RBY1_ROS2_DRIVER<ModelType>::position_command_callback, this, std::placeholders::_1));
                 // Timer for 100Hz publishing (10ms)
                 joint_state_timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&RBY1_ROS2_DRIVER<ModelType>::read_joint_state, this));
             }
@@ -319,51 +322,122 @@ namespace rby1_ros2{
         }
     }
 
-template <typename ModelType>
-void RBY1_ROS2_DRIVER<ModelType>::categorize_joints(){
-    // SDK에서 자동으로 채워주지 않을 경우를 대비해 수동으로 분류
-    info_.torso_joint_idx.clear();
-    info_.right_arm_joint_idx.clear();
-    info_.left_arm_joint_idx.clear();
-    info_.head_joint_idx.clear();
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::position_command_callback(const sensor_msgs::msg::JointState::SharedPtr msg){
+        // name 에서 , 가 있는지 확인하고 있으면 분리해서 어떤 파트들이 들어왔는지 확인
+        // 각 파트에 맞는 순서로 position을 잘라내서 저장한 후 커멘드에 입력
+        std::vector<double> q_joint_torso;
+        std::vector<double> q_joint_right_arm;
+        std::vector<double> q_joint_left_arm;
+        std::vector<double> q_joint_head;
+        
+        bool use_torso = false, use_right_arm = false, use_left_arm = false, use_head = false;
+        size_t current_idx = 0;
 
-    for (size_t i = 0; i < info_.joint_infos.size(); ++i) {
-        const std::string& name = info_.joint_infos[i].name;
-        if (name.find("torso_") != std::string::npos) {
-            info_.torso_joint_idx.push_back(i);
-        } else if (name.find("right_arm_") != std::string::npos) {
-            info_.right_arm_joint_idx.push_back(i);
-        } else if (name.find("left_arm_") != std::string::npos) {
-            info_.left_arm_joint_idx.push_back(i);
-        } else if (name.find("head_") != std::string::npos) {
-            info_.head_joint_idx.push_back(i);
+        for (const auto& raw_name : msg->name) {
+            std::stringstream ss(raw_name);
+            std::string part;
+            while(std::getline(ss, part, ',')) {
+                if (part == "torso") {
+                    if (current_idx + info_.torso_joint_idx.size() <= msg->position.size()) {
+                        q_joint_torso.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.torso_joint_idx.size());
+                        current_idx += info_.torso_joint_idx.size();
+                        use_torso = true;
+                    }
+                } else if (part == "right_arm") {
+                    if (current_idx + info_.right_arm_joint_idx.size() <= msg->position.size()) {
+                        q_joint_right_arm.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.right_arm_joint_idx.size());
+                        current_idx += info_.right_arm_joint_idx.size();
+                        use_right_arm = true;
+                    }
+                } else if (part == "left_arm") {
+                    if (current_idx + info_.left_arm_joint_idx.size() <= msg->position.size()) {
+                        q_joint_left_arm.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.left_arm_joint_idx.size());
+                        current_idx += info_.left_arm_joint_idx.size();
+                        use_left_arm = true;
+                    }
+                } else if (part == "head") {
+                    if (current_idx + info_.head_joint_idx.size() <= msg->position.size()) {
+                        q_joint_head.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.head_joint_idx.size());
+                        current_idx += info_.head_joint_idx.size();
+                        use_head = true;
+                    }
+                }
+            }
+        }
+
+        if (!use_torso && !use_right_arm && !use_left_arm && !use_head) {
+            RCLCPP_WARN(this->get_logger(), "No valid component names found in position_command message.");
+            return;
+        }
+
+        auto body_cmd_builder = rb::BodyComponentBasedCommandBuilder();
+        if (use_torso) body_cmd_builder.SetTorsoCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_torso.data(), q_joint_torso.size())));
+        if (use_right_arm) body_cmd_builder.SetRightArmCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_right_arm.data(), q_joint_right_arm.size())));
+        if (use_left_arm) body_cmd_builder.SetLeftArmCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_left_arm.data(), q_joint_left_arm.size())));
+
+        auto component_cmd_builder = rb::ComponentBasedCommandBuilder();
+        component_cmd_builder.SetBodyCommand(body_cmd_builder);
+        if (use_head) {
+            component_cmd_builder.SetHeadCommand(rb::HeadCommandBuilder().SetCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_head.data(), q_joint_head.size()))));
+        }
+
+        auto rv =
+        robot_
+            ->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder))
+            ->Get();
+
+        if (rv.finish_code() != rb::RobotCommandFeedback::FinishCode::kOk) {
+            RCLCPP_ERROR(this->get_logger(), "Error: Failed to conduct position command. FinishCode: %d", (int)rv.finish_code());
         }
     }
-}
 
-template <typename ModelType>
-void RBY1_ROS2_DRIVER<ModelType>::resize_joint_states(){
-    // info의 실제 인덱스 벡터 크기에 맞춰 resize 수행 (하드코딩 제거)
-    robot_state_.joint_torso.name.resize(info_.torso_joint_idx.size());
-    robot_state_.joint_torso.position.resize(info_.torso_joint_idx.size());
-    robot_state_.joint_torso.velocity.resize(info_.torso_joint_idx.size());
-    robot_state_.joint_torso.effort.resize(info_.torso_joint_idx.size());
 
-    robot_state_.joint_right_arm.name.resize(info_.right_arm_joint_idx.size());
-    robot_state_.joint_right_arm.position.resize(info_.right_arm_joint_idx.size());
-    robot_state_.joint_right_arm.velocity.resize(info_.right_arm_joint_idx.size());
-    robot_state_.joint_right_arm.effort.resize(info_.right_arm_joint_idx.size());
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::categorize_joints(){
+        // SDK에서 자동으로 채워주지 않을 경우를 대비해 수동으로 분류
+        info_.torso_joint_idx.clear();
+        info_.right_arm_joint_idx.clear();
+        info_.left_arm_joint_idx.clear();
+        info_.head_joint_idx.clear();
 
-    robot_state_.joint_left_arm.name.resize(info_.left_arm_joint_idx.size());
-    robot_state_.joint_left_arm.position.resize(info_.left_arm_joint_idx.size());
-    robot_state_.joint_left_arm.velocity.resize(info_.left_arm_joint_idx.size());
-    robot_state_.joint_left_arm.effort.resize(info_.left_arm_joint_idx.size());
+        for (size_t i = 0; i < info_.joint_infos.size(); ++i) {
+            const std::string& name = info_.joint_infos[i].name;
+            if (name.find("torso_") != std::string::npos) {
+                info_.torso_joint_idx.push_back(i);
+            } else if (name.find("right_arm_") != std::string::npos) {
+                info_.right_arm_joint_idx.push_back(i);
+            } else if (name.find("left_arm_") != std::string::npos) {
+                info_.left_arm_joint_idx.push_back(i);
+            } else if (name.find("head_") != std::string::npos) {
+                info_.head_joint_idx.push_back(i);
+            }
+        }
+    }
 
-    robot_state_.joint_head.name.resize(info_.head_joint_idx.size());
-    robot_state_.joint_head.position.resize(info_.head_joint_idx.size());
-    robot_state_.joint_head.velocity.resize(info_.head_joint_idx.size());
-    robot_state_.joint_head.effort.resize(info_.head_joint_idx.size());
-}
+    template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::resize_joint_states(){
+        // info의 실제 인덱스 벡터 크기에 맞춰 resize 수행 (하드코딩 제거)
+        robot_state_.joint_torso.name.resize(info_.torso_joint_idx.size());
+        robot_state_.joint_torso.position.resize(info_.torso_joint_idx.size());
+        robot_state_.joint_torso.velocity.resize(info_.torso_joint_idx.size());
+        robot_state_.joint_torso.effort.resize(info_.torso_joint_idx.size());
+
+        robot_state_.joint_right_arm.name.resize(info_.right_arm_joint_idx.size());
+        robot_state_.joint_right_arm.position.resize(info_.right_arm_joint_idx.size());
+        robot_state_.joint_right_arm.velocity.resize(info_.right_arm_joint_idx.size());
+        robot_state_.joint_right_arm.effort.resize(info_.right_arm_joint_idx.size());
+
+        robot_state_.joint_left_arm.name.resize(info_.left_arm_joint_idx.size());
+        robot_state_.joint_left_arm.position.resize(info_.left_arm_joint_idx.size());
+        robot_state_.joint_left_arm.velocity.resize(info_.left_arm_joint_idx.size());
+        robot_state_.joint_left_arm.effort.resize(info_.left_arm_joint_idx.size());
+
+        robot_state_.joint_head.name.resize(info_.head_joint_idx.size());
+        robot_state_.joint_head.position.resize(info_.head_joint_idx.size());
+        robot_state_.joint_head.velocity.resize(info_.head_joint_idx.size());
+        robot_state_.joint_head.effort.resize(info_.head_joint_idx.size());
+    }
 
     // Explicit template instantiations
     template class RBY1_ROS2_DRIVER<rb::y1_model::A>;
