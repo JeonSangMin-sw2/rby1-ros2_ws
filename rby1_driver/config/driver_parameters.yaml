@@ -2,13 +2,13 @@
   ros__parameters:
     # RBY1 initialize Information
     robot_ip: "127.0.0.1:50051"
-    model: "m" # A or M
+    model: "a" # A or M
 
     # power on
-    power_on: [5,12,24,48]
+    power_on: ["all"]
 
     # servo on
-    servo_on: [".*"]
+    servo_on: ["all"]
 
     # 
     minimum_time: 2.0 # seconds

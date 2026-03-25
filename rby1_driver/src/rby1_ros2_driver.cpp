@@ -9,24 +9,27 @@ namespace rby1_ros2{
             
             //declare parameter from yaml
             init_parameter();
-            if (address == "" || model == ""){
-                RCLCPP_ERROR(this->get_logger(), "address or model isn't declared");
-            }
             try{
                 robot_ = rb::Robot<ModelType>::Create(address);
-                robot_->Connect();
+                if(robot_->Connect()){
+                    robot_->SetParameter("default.acceleration_limit_scaling", std::to_string(robot_parameter_.acceleration_limit));
+                    robot_->SetParameter("joint_position_command.cutoff_frequency", std::to_string(robot_parameter_.angular_velocity_limit));
+                    robot_->SetParameter("cartesian_command.cutoff_frequency", std::to_string(robot_parameter_.linear_velocity_limit));
+                    robot_->SetParameter("default.linear_acceleration_limit", std::to_string(robot_parameter_.acceleration_limit));
+                    // Fetch robot info once and cache it
+                    info_ = robot_->GetRobotInfo();
+                    RCLCPP_INFO(this->get_logger(), "Robot Info: Model=%s, Version=%s", info_.robot_model_name.c_str(), info_.robot_model_version.c_str());
+                    RCLCPP_INFO(this->get_logger(), "Joint counts: torso=%zu, right_arm=%zu, left_arm=%zu, head=%zu, mobility=%zu", 
+                                info_.torso_joint_idx.size(), info_.right_arm_joint_idx.size(), 
+                                info_.left_arm_joint_idx.size(), info_.head_joint_idx.size(), 
+                                info_.mobility_joint_idx.size());
+                    resize_joint_states();
+                }
                 
-                // Fetch robot info once and cache it
-                info_ = robot_->GetRobotInfo();
-                categorize_joints();
-                
-                // Initialize joint state containers and publishers
-                resize_joint_states();
                 torso_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/torso", 10);
                 right_arm_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/right_arm", 10);
                 left_arm_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/left_arm", 10);
                 head_pub_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/head", 10);
-                
                 position_sub_ = this->create_subscription<sensor_msgs::msg::JointState>(joint_topic_name + "/position_command", 10, std::bind(&RBY1_ROS2_DRIVER<ModelType>::position_command_callback, this, std::placeholders::_1));
                 // Timer for 100Hz publishing (10ms)
                 joint_state_timer_ = this->create_wall_timer(std::chrono::milliseconds(10), std::bind(&RBY1_ROS2_DRIVER<ModelType>::read_joint_state, this));
@@ -36,14 +39,11 @@ namespace rby1_ros2{
             }
 
             //test code
-            power_on(power_on_list_);   
-            servo_on(servo_on_list_);
+            power_on(robot_parameter_.power_on_list);   
+            servo_on(robot_parameter_.servo_on_list);
             check_controll_manager();
 
-            robot_->SetParameter("default.acceleration_limit_scaling", std::to_string(acceleration_limit));
-            robot_->SetParameter("joint_position_command.cutoff_frequency", std::to_string(angular_velocity_limit));
-            robot_->SetParameter("cartesian_command.cutoff_frequency", std::to_string(linear_velocity_limit));
-            robot_->SetParameter("default.linear_acceleration_limit", std::to_string(acceleration_limit));
+            
             //power_off();
     }
 
@@ -58,7 +58,7 @@ namespace rby1_ros2{
         this->declare_parameter<std::string>("robot_ip", "127.0.0.1:50051");
         this->declare_parameter<std::string>("model", "a");
         this->declare_parameter<std::string>("joint_topic_name", "joint_states");
-        this->declare_parameter<std::vector<int64_t>>("power_on", {5,12,24,48});
+        this->declare_parameter<std::vector<std::string>>("power_on", {"all"});
         this->declare_parameter<std::vector<std::string>>("servo_on", {"all"});
 
         this->declare_parameter<double>("minimum_time", 2.0);
@@ -74,39 +74,40 @@ namespace rby1_ros2{
         this->get_parameter("robot_ip", address);
         this->get_parameter("model", model);
         this->get_parameter("joint_topic_name", joint_topic_name);
-        this->get_parameter("power_on", power_on_list_);
-        this->get_parameter("servo_on", servo_on_list_);
-        this->get_parameter("minimum_time", minimum_time);
-        this->get_parameter("angular_velocity_limit", angular_velocity_limit);
-        this->get_parameter("linear_velocity_limit", linear_velocity_limit);
-        this->get_parameter("acceleration_limit", acceleration_limit);
-        this->get_parameter("stop_orientation_tracking_error", stop_orientation_tracking_error);
-        this->get_parameter("stop_position_tracking_error", stop_position_tracking_error);
+        this->get_parameter("power_on", robot_parameter_.power_on_list);
+        this->get_parameter("servo_on", robot_parameter_.servo_on_list);
+        this->get_parameter("minimum_time", robot_parameter_.minimum_time);
+        this->get_parameter("angular_velocity_limit", robot_parameter_.angular_velocity_limit);
+        this->get_parameter("linear_velocity_limit", robot_parameter_.linear_velocity_limit);
+        this->get_parameter("acceleration_limit", robot_parameter_.acceleration_limit);
+        this->get_parameter("stop_orientation_tracking_error", robot_parameter_.stop_orientation_tracking_error);
+        this->get_parameter("stop_position_tracking_error", robot_parameter_.stop_position_tracking_error);
         this->get_parameter("fault_reset_trigger", fault_reset_trigger);
         this->get_parameter("node_power_off_trigger", node_power_off_trigger);
+
+        if (address == "" || model == ""){
+            RCLCPP_ERROR(this->get_logger(), "address or model isn't declared");
+            rclcpp::shutdown();
+        }
     }
 
     template <typename ModelType>
-    bool RBY1_ROS2_DRIVER<ModelType>::power_on(std::vector<int64_t> power_list){
-        // Check for invalid values in power_list
-        const std::vector<int64_t> allowed_values = {5, 12, 24, 48};
+    bool RBY1_ROS2_DRIVER<ModelType>::power_on(std::vector<std::string> power_list){
+        power_list_str = "";
         if (address == "127.0.0.1:50051"){
             power_list_str = ".*";
         }else{
-            for (int64_t p : power_list) {
-                if (std::find(allowed_values.begin(), allowed_values.end(), p) == allowed_values.end()) {
-                    RCLCPP_ERROR(this->get_logger(), "[power on]Invalid power value: %ld. Allowed values are 5, 12, 24, 48.", p);
-                    return false;
+            for (size_t i = 0; i < power_list.size(); i++) {
+                if (power_list[i] == "all" || power_list[i] == ".*") {
+                    power_list_str = ".*";
+                    break;
                 }
-            }
-            if((int)power_list.size() != 0){
-                for (size_t i = 0; i < power_list.size(); i++) {
-                    power_list_str += std::to_string(power_list[i]);
-                    if (i != power_list.size() - 1){
-                        power_list_str += "v|";
-                    }else{
-                        power_list_str += "v";
-                    }
+                power_list_str += power_list[i];
+                if (power_list[i].find('v') == std::string::npos && power_list[i] != ".*") {
+                    power_list_str += "v";
+                }
+                if (i != power_list.size() - 1){
+                    power_list_str += "|";
                 }
             }
         }
@@ -116,23 +117,22 @@ namespace rby1_ros2{
     }
 
     template <typename ModelType>
-    bool RBY1_ROS2_DRIVER<ModelType>::power_off(std::vector<int64_t> power_list){
-        const std::vector<int64_t> allowed_values = {5, 12, 24, 48};
+    bool RBY1_ROS2_DRIVER<ModelType>::power_off(std::vector<std::string> power_list){
+        power_list_str = "";
         if (address == "127.0.0.1:50051"){
             power_list_str = ".*";
         }else{
-            for (int64_t p : power_list) {
-                if (std::find(allowed_values.begin(), allowed_values.end(), p) == allowed_values.end()) {
-                    RCLCPP_ERROR(this->get_logger(), "[power off]Invalid power value: %ld. Allowed values are 5, 12, 24, 48.", p);
-                    return false;
-                }
-            }
             for (size_t i = 0; i < power_list.size(); i++) {
-                power_list_str += std::to_string(power_list[i]);
-                if (i != power_list.size() - 1){
-                    power_list_str += "v|";
-                }else{
+                if (power_list[i] == "all" || power_list[i] == ".*") {
+                    power_list_str = ".*";
+                    break;
+                }
+                power_list_str += power_list[i];
+                if (power_list[i].find('v') == std::string::npos && power_list[i] != ".*") {
                     power_list_str += "v";
+                }
+                if (i != power_list.size() - 1){
+                    power_list_str += "|";
                 }
             }
         }
@@ -168,7 +168,7 @@ namespace rby1_ros2{
         {
             std::lock_guard<std::mutex> lock(mutex_);
             info_ = robot_->GetRobotInfo();
-            categorize_joints(); // 조인트 분류 수행
+            //categorize_joints(); // 조인트 분류 수행
             resize_joint_states();
         }
 
@@ -208,7 +208,7 @@ namespace rby1_ros2{
         {
             std::lock_guard<std::mutex> lock(mutex_);
             info_ = robot_->GetRobotInfo();
-            categorize_joints();
+            //categorize_joints();
             resize_joint_states();
         }
 
@@ -261,71 +261,30 @@ namespace rby1_ros2{
             RCLCPP_ERROR(this->get_logger(), "Failed to enable the Control Manager.");
             return false;
         }
-        RCLCPP_INFO(this->get_logger(), "Control Manager enabled successfully.");
+
+        // Wait for control ready to ensure SendCommand doesn't fail with kUnknown immediately
+        if (!robot_->WaitForControlReady(2000)) {
+            RCLCPP_WARN(this->get_logger(), "Control Manager enabled, but timed out waiting for Control Ready status.");
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Control Manager enabled and ready.");
+        }
+        
         return true;
     }
 
     template <typename ModelType>
-    void RBY1_ROS2_DRIVER<ModelType>::init_joint_states(){
-        auto info = robot_->GetRobotInfo();
-
-        robot_state_.joint_torso.name.clear();
-        robot_state_.joint_torso.position.clear();
-        robot_state_.joint_torso.velocity.clear();
-        robot_state_.joint_torso.effort.clear();
-        robot_state_.joint_torso.name.resize(info.torso_joint_idx.size());
-        robot_state_.joint_torso.position.resize(info.torso_joint_idx.size());
-        robot_state_.joint_torso.velocity.resize(info.torso_joint_idx.size());
-        robot_state_.joint_torso.effort.resize(info.torso_joint_idx.size());
-
-        robot_state_.joint_right_arm.name.clear();
-        robot_state_.joint_right_arm.position.clear();
-        robot_state_.joint_right_arm.velocity.clear();
-        robot_state_.joint_right_arm.effort.clear();
-        robot_state_.joint_right_arm.name.resize(info.right_arm_joint_idx.size());
-        robot_state_.joint_right_arm.position.resize(info.right_arm_joint_idx.size());
-        robot_state_.joint_right_arm.velocity.resize(info.right_arm_joint_idx.size());
-        robot_state_.joint_right_arm.effort.resize(info.right_arm_joint_idx.size());
-
-        robot_state_.joint_left_arm.name.clear();
-        robot_state_.joint_left_arm.position.clear();
-        robot_state_.joint_left_arm.velocity.clear();
-        robot_state_.joint_left_arm.effort.clear();
-        robot_state_.joint_left_arm.name.resize(info.left_arm_joint_idx.size());
-        robot_state_.joint_left_arm.position.resize(info.left_arm_joint_idx.size());
-        robot_state_.joint_left_arm.velocity.resize(info.left_arm_joint_idx.size());
-        robot_state_.joint_left_arm.effort.resize(info.left_arm_joint_idx.size());
-
-        robot_state_.joint_head.name.clear();
-        robot_state_.joint_head.position.clear();
-        robot_state_.joint_head.velocity.clear();
-        robot_state_.joint_head.effort.clear();
-        robot_state_.joint_head.name.resize(info.head_joint_idx.size());
-        robot_state_.joint_head.position.resize(info.head_joint_idx.size());
-        robot_state_.joint_head.velocity.resize(info.head_joint_idx.size());
-        robot_state_.joint_head.effort.resize(info.head_joint_idx.size());
-
-        for (size_t i = 0; i < info.torso_joint_idx.size(); ++i) {
-            robot_state_.joint_torso.name[i] = info.joint_infos[info.torso_joint_idx[i]].name;
+    std::string RBY1_ROS2_DRIVER<ModelType>::finish_code_to_string(rb::RobotCommandFeedback::FinishCode code) {
+        switch (code) {
+            case rb::RobotCommandFeedback::FinishCode::kUnknown: return "kUnknown (0)";
+            case rb::RobotCommandFeedback::FinishCode::kOk: return "kOk (1)";
+            case rb::RobotCommandFeedback::FinishCode::kCanceled: return "kCanceled (2)";
+            case rb::RobotCommandFeedback::FinishCode::kPreempted: return "kPreempted (3)";
+            case rb::RobotCommandFeedback::FinishCode::kInitializationFailed: return "kInitializationFailed (4)";
+            case rb::RobotCommandFeedback::FinishCode::kControlManagerIdle: return "kControlManagerIdle (5)";
+            case rb::RobotCommandFeedback::FinishCode::kControlManagerFault: return "kControlManagerFault (6)";
+            case rb::RobotCommandFeedback::FinishCode::kUnexpectedState: return "kUnexpectedState (7)";
+            default: return "Unknown (" + std::to_string((int)code) + ")";
         }
-        for (size_t i = 0; i < info.right_arm_joint_idx.size(); ++i) {
-            robot_state_.joint_right_arm.name[i] = info.joint_infos[info.right_arm_joint_idx[i]].name;
-        }
-        for (size_t i = 0; i < info.left_arm_joint_idx.size(); ++i) {
-            robot_state_.joint_left_arm.name[i] = info.joint_infos[info.left_arm_joint_idx[i]].name;
-        }
-        for (size_t i = 0; i < info.head_joint_idx.size(); ++i) {
-            robot_state_.joint_head.name[i] = info.joint_infos[info.head_joint_idx[i]].name;
-        }
-
-        pub_torso_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/torso", 10);
-        pub_right_arm_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/right_arm", 10);
-        pub_left_arm_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/left_arm", 10);
-        pub_head_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/head", 10);
-        
-        timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(10), 
-            std::bind(&RBY1_ROS2_DRIVER::read_joint_state, this));
     }
 
     template <typename ModelType>
@@ -337,67 +296,40 @@ namespace rby1_ros2{
             std::lock_guard<std::mutex> lock(mutex_);
             auto now = this->now();
             
-            // Fill torso joint state
-            robot_state_.joint_torso.header.stamp = now;
-            for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
-                int idx = info_.torso_joint_idx[i];
-                robot_state_.joint_torso.name[i] = info_.joint_infos[idx].name;
-                robot_state_.joint_torso.position[i] = state.position[idx];
-                robot_state_.joint_torso.velocity[i] = state.velocity[idx];
-                robot_state_.joint_torso.effort[i] = state.torque[idx];
-            }
-            
-            // Fill right arm joint state
-            robot_state_.joint_right_arm.header.stamp = now;
-            for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
-                int idx = info_.right_arm_joint_idx[i];
-                robot_state_.joint_right_arm.name[i] = info_.joint_infos[idx].name;
-                robot_state_.joint_right_arm.position[i] = state.position[idx];
-                robot_state_.joint_right_arm.velocity[i] = state.velocity[idx];
-                robot_state_.joint_right_arm.effort[i] = state.torque[idx];
-            }
-            
-            // Fill left arm joint state
-            robot_state_.joint_left_arm.header.stamp = now;
-            for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
-                int idx = info_.left_arm_joint_idx[i];
-                robot_state_.joint_left_arm.name[i] = info_.joint_infos[idx].name;
-                robot_state_.joint_left_arm.position[i] = state.position[idx];
-                robot_state_.joint_left_arm.velocity[i] = state.velocity[idx];
-                robot_state_.joint_left_arm.effort[i] = state.torque[idx];
-            }
-            
-            // Fill head joint state
-            robot_state_.joint_head.header.stamp = now;
-            for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
-                int idx = info_.head_joint_idx[i];
-                robot_state_.joint_head.name[i] = info_.joint_infos[idx].name;
-                robot_state_.joint_head.position[i] = state.position[idx];
-                robot_state_.joint_head.velocity[i] = state.velocity[idx];
-                robot_state_.joint_head.effort[i] = state.torque[idx];
-            }
-            
-            // Mutex 범위 내에서 publish (가장 안전한 방법)
-            torso_pub_->publish(robot_state_.joint_torso);
-            right_arm_pub_->publish(robot_state_.joint_right_arm);
-            left_arm_pub_->publish(robot_state_.joint_left_arm);
-            head_pub_->publish(robot_state_.joint_head);
-        }
+            auto fill = [&](JointState& js, const std::vector<unsigned int>& idx_vec){
+                js.header.stamp = now;
+                for (size_t i = 0; i < idx_vec.size(); ++i) {
+                    unsigned int idx = idx_vec[i];
+                    js.name[i]     = info_.joint_infos[idx].name;
+                    js.position[i] = state.position[idx];
+                    js.velocity[i] = state.velocity[idx];
+                    js.effort[i]   = state.torque[idx];
+                }
+            };
 
-        if (pub_torso_) pub_torso_->publish(robot_state_.joint_torso);
-        if (pub_right_arm_) pub_right_arm_->publish(robot_state_.joint_right_arm);
-        if (pub_left_arm_) pub_left_arm_->publish(robot_state_.joint_left_arm);
-        if (pub_head_) pub_head_->publish(robot_state_.joint_head);
+            fill(robot_joint_.joint_torso,     info_.torso_joint_idx);
+            fill(robot_joint_.joint_right_arm,  info_.right_arm_joint_idx);
+            fill(robot_joint_.joint_left_arm,   info_.left_arm_joint_idx);
+            fill(robot_joint_.joint_head,       info_.head_joint_idx);
+            //fill(robot_joint_.joint_wheel,      info_.mobility_joint_idx);
+
+            torso_pub_->publish(robot_joint_.joint_torso);
+            right_arm_pub_->publish(robot_joint_.joint_right_arm);
+            left_arm_pub_->publish(robot_joint_.joint_left_arm);
+            head_pub_->publish(robot_joint_.joint_head);
+           // wheel_pub_->publish(robot_joint_.joint_wheel);
+        }
     }
+
 
     template <typename ModelType>
     void RBY1_ROS2_DRIVER<ModelType>::position_command_callback(const sensor_msgs::msg::JointState::SharedPtr msg){
         // name 에서 , 가 있는지 확인하고 있으면 분리해서 어떤 파트들이 들어왔는지 확인
         // 각 파트에 맞는 순서로 position을 잘라내서 저장한 후 커멘드에 입력
-        std::vector<double> q_joint_torso;
-        std::vector<double> q_joint_right_arm;
-        std::vector<double> q_joint_left_arm;
-        std::vector<double> q_joint_head;
+        Eigen::Vector<double, 6> q_joint_torso;
+        Eigen::Vector<double, 7> q_joint_right_arm;
+        Eigen::Vector<double, 7> q_joint_left_arm;
+        Eigen::Vector<double, 2> q_joint_head;
         
         bool use_torso = false, use_right_arm = false, use_left_arm = false, use_head = false;
         size_t current_idx = 0;
@@ -408,27 +340,39 @@ namespace rby1_ros2{
             while(std::getline(ss, part, ',')) {
                 if (part == "torso") {
                     if (current_idx + info_.torso_joint_idx.size() <= msg->position.size()) {
-                        q_joint_torso.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.torso_joint_idx.size());
+                        for (size_t i = 0; i < info_.torso_joint_idx.size(); ++i) {
+                            q_joint_torso[i] = msg->position[current_idx + i];
+                        }
                         current_idx += info_.torso_joint_idx.size();
                         use_torso = true;
+                        RCLCPP_INFO(this->get_logger(), "Torso command received, value: %f,%f,%f,%f,%f,%f", q_joint_torso[0], q_joint_torso[1], q_joint_torso[2], q_joint_torso[3], q_joint_torso[4], q_joint_torso[5]);
                     }
                 } else if (part == "right_arm") {
                     if (current_idx + info_.right_arm_joint_idx.size() <= msg->position.size()) {
-                        q_joint_right_arm.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.right_arm_joint_idx.size());
+                        for (size_t i = 0; i < info_.right_arm_joint_idx.size(); ++i) {
+                            q_joint_right_arm[i] = msg->position[current_idx + i];
+                        }
                         current_idx += info_.right_arm_joint_idx.size();
                         use_right_arm = true;
+                        RCLCPP_INFO(this->get_logger(), "Right arm command received, value: %f,%f,%f,%f,%f,%f,%f", q_joint_right_arm[0], q_joint_right_arm[1], q_joint_right_arm[2], q_joint_right_arm[3], q_joint_right_arm[4], q_joint_right_arm[5], q_joint_right_arm[6]);
                     }
                 } else if (part == "left_arm") {
                     if (current_idx + info_.left_arm_joint_idx.size() <= msg->position.size()) {
-                        q_joint_left_arm.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.left_arm_joint_idx.size());
+                        for (size_t i = 0; i < info_.left_arm_joint_idx.size(); ++i) {
+                            q_joint_left_arm[i] = msg->position[current_idx + i];
+                        }
                         current_idx += info_.left_arm_joint_idx.size();
                         use_left_arm = true;
+                        RCLCPP_INFO(this->get_logger(), "Left arm command received, value: %f,%f,%f,%f,%f,%f,%f", q_joint_left_arm[0], q_joint_left_arm[1], q_joint_left_arm[2], q_joint_left_arm[3], q_joint_left_arm[4], q_joint_left_arm[5], q_joint_left_arm[6]);
                     }
                 } else if (part == "head") {
                     if (current_idx + info_.head_joint_idx.size() <= msg->position.size()) {
-                        q_joint_head.assign(msg->position.begin() + current_idx, msg->position.begin() + current_idx + info_.head_joint_idx.size());
+                        for (size_t i = 0; i < info_.head_joint_idx.size(); ++i) {
+                            q_joint_head[i] = msg->position[current_idx + i];
+                        }
                         current_idx += info_.head_joint_idx.size();
                         use_head = true;
+                        RCLCPP_INFO(this->get_logger(), "Head command received, value: %f,%f", q_joint_head[0], q_joint_head[1]);
                     }
                 }
             }
@@ -439,72 +383,119 @@ namespace rby1_ros2{
             return;
         }
 
-        auto body_cmd_builder = rb::BodyComponentBasedCommandBuilder();
-        if (use_torso) body_cmd_builder.SetTorsoCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_torso.data(), q_joint_torso.size())));
-        if (use_right_arm) body_cmd_builder.SetRightArmCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_right_arm.data(), q_joint_right_arm.size())));
-        if (use_left_arm) body_cmd_builder.SetLeftArmCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_left_arm.data(), q_joint_left_arm.size())));
-
-        auto component_cmd_builder = rb::ComponentBasedCommandBuilder();
-        component_cmd_builder.SetBodyCommand(body_cmd_builder);
+        // Handle Head (2 joints) separately
         if (use_head) {
-            component_cmd_builder.SetHeadCommand(rb::HeadCommandBuilder().SetCommand(rb::JointPositionCommandBuilder().SetMinimumTime(minimum_time).SetPosition(Eigen::Map<const Eigen::VectorXd>(q_joint_head.data(), q_joint_head.size()))));
+            rb::ComponentBasedCommandBuilder head_command;
+            head_command.SetHeadCommand(rb::HeadCommandBuilder(
+                rb::JointPositionCommandBuilder()
+                    .SetMinimumTime(robot_parameter_.minimum_time)
+                    .SetPosition(q_joint_head)));
+            
+            // Note: Currently whole command context is for Body. 
+            // If you want to send Head at the same time, we should use a single ComponentBasedCommandBuilder.
         }
 
-        auto rv =
-        robot_
-            ->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder))
-            ->Get();
+        auto status = robot_->GetControlManagerState();
+        RCLCPP_INFO(this->get_logger(), "Sending command... Control Manager state: %d, Control state: %d", (int)status.state, (int)status.control_state);
+
+        // Ensure time sync if necessary
+        if (!robot_->HasEstablishedTimeSync()) {
+            robot_->SyncTime();
+        }
+
+        rb::ComponentBasedCommandBuilder component_cmd_builder;
+        if (use_torso || use_right_arm || use_left_arm) {
+             rb::BodyComponentBasedCommandBuilder body_comp;
+             if (use_torso) body_comp.SetTorsoCommand(rb::TorsoCommandBuilder(rb::JointPositionCommandBuilder().SetMinimumTime(robot_parameter_.minimum_time).SetPosition(q_joint_torso)));
+             if (use_right_arm) body_comp.SetRightArmCommand(rb::ArmCommandBuilder(rb::JointPositionCommandBuilder().SetMinimumTime(robot_parameter_.minimum_time).SetPosition(q_joint_right_arm)));
+             if (use_left_arm) body_comp.SetLeftArmCommand(rb::ArmCommandBuilder(rb::JointPositionCommandBuilder().SetMinimumTime(robot_parameter_.minimum_time).SetPosition(q_joint_left_arm)));
+             component_cmd_builder.SetBodyCommand(rb::BodyCommandBuilder(body_comp));
+        }
+        if (use_head) {
+            component_cmd_builder.SetHeadCommand(rb::HeadCommandBuilder(rb::JointPositionCommandBuilder().SetMinimumTime(robot_parameter_.minimum_time).SetPosition(q_joint_head)));
+        }
+
+        auto rv = robot_->SendCommand(rb::RobotCommandBuilder().SetCommand(component_cmd_builder))->Get();
 
         if (rv.finish_code() != rb::RobotCommandFeedback::FinishCode::kOk) {
-            RCLCPP_ERROR(this->get_logger(), "Error: Failed to conduct position command. FinishCode: %d", (int)rv.finish_code());
+            RCLCPP_ERROR(this->get_logger(), "Error: Failed to conduct position command. FinishCode: %s", this->finish_code_to_string(rv.finish_code()).c_str());
+            RCLCPP_ERROR(this->get_logger(), "Feedback status: %d (0:Idle, 1:Init, 2:Running, 3:Finished)", (int)rv.status());
+        } else {
+            RCLCPP_INFO(this->get_logger(), "Command executed successfully.");
         }
     }
 
 
-    template <typename ModelType>
-    void RBY1_ROS2_DRIVER<ModelType>::categorize_joints(){
-        // SDK에서 자동으로 채워주지 않을 경우를 대비해 수동으로 분류
-        info_.torso_joint_idx.clear();
-        info_.right_arm_joint_idx.clear();
-        info_.left_arm_joint_idx.clear();
-        info_.head_joint_idx.clear();
-
-        for (size_t i = 0; i < info_.joint_infos.size(); ++i) {
-            const std::string& name = info_.joint_infos[i].name;
-            if (name.find("torso_") != std::string::npos) {
-                info_.torso_joint_idx.push_back(i);
-            } else if (name.find("right_arm_") != std::string::npos) {
-                info_.right_arm_joint_idx.push_back(i);
-            } else if (name.find("left_arm_") != std::string::npos) {
-                info_.left_arm_joint_idx.push_back(i);
-            } else if (name.find("head_") != std::string::npos) {
-                info_.head_joint_idx.push_back(i);
-            }
-        }
-    }
 
     template <typename ModelType>
     void RBY1_ROS2_DRIVER<ModelType>::resize_joint_states(){
-        // info의 실제 인덱스 벡터 크기에 맞춰 resize 수행 (하드코딩 제거)
-        robot_state_.joint_torso.name.resize(info_.torso_joint_idx.size());
-        robot_state_.joint_torso.position.resize(info_.torso_joint_idx.size());
-        robot_state_.joint_torso.velocity.resize(info_.torso_joint_idx.size());
-        robot_state_.joint_torso.effort.resize(info_.torso_joint_idx.size());
+        // 고정 DOF 기준으로 resize
+        constexpr size_t kTorsoDOF    = 6;
+        constexpr size_t kArmDOF      = 7;
+        constexpr size_t kHeadDOF     = 2;
+        // 바퀴 수: model A → 2, model M → 4
+        // constexpr size_t kWheelDOF =
+        //     std::is_same_v<ModelType, rb::y1_model::A> ? 2 : 4;
 
-        robot_state_.joint_right_arm.name.resize(info_.right_arm_joint_idx.size());
-        robot_state_.joint_right_arm.position.resize(info_.right_arm_joint_idx.size());
-        robot_state_.joint_right_arm.velocity.resize(info_.right_arm_joint_idx.size());
-        robot_state_.joint_right_arm.effort.resize(info_.right_arm_joint_idx.size());
+        auto resize_js = [](JointState& js, size_t n) {
+            js.name.assign(n, "");
+            js.position.assign(n, 0.0);
+            js.velocity.assign(n, 0.0);
+            js.effort.assign(n, 0.0);
+        };
 
-        robot_state_.joint_left_arm.name.resize(info_.left_arm_joint_idx.size());
-        robot_state_.joint_left_arm.position.resize(info_.left_arm_joint_idx.size());
-        robot_state_.joint_left_arm.velocity.resize(info_.left_arm_joint_idx.size());
-        robot_state_.joint_left_arm.effort.resize(info_.left_arm_joint_idx.size());
+        resize_js(robot_joint_.joint_torso,     kTorsoDOF);
+        resize_js(robot_joint_.joint_right_arm,  kArmDOF);
+        resize_js(robot_joint_.joint_left_arm,   kArmDOF);
+        resize_js(robot_joint_.joint_head,       kHeadDOF);
+        //resize_js(robot_joint_.joint_wheel,      kWheelDOF);
+    }
 
-        robot_state_.joint_head.name.resize(info_.head_joint_idx.size());
-        robot_state_.joint_head.position.resize(info_.head_joint_idx.size());
-        robot_state_.joint_head.velocity.resize(info_.head_joint_idx.size());
-        robot_state_.joint_head.effort.resize(info_.head_joint_idx.size());
+    // =========================================================================
+    // [TEST ONLY - DRAFT] Flexible Command Builder Factory Proposal
+    // These structures demonstrate how to handle various command types efficiently.
+    // To use these, you should move the struct to hpp and add a member function declaration.
+    // =========================================================================
+
+    /**
+     * @brief A structure representing a 'Recipe' for a robot command.
+     */
+    struct CommandRecipe {
+        std::string command_type; // e.g., "joint_position", "cartesian", "velocity", "jog"
+        double minimum_time = 2.0;
+        
+        // Data maps for different command flavors
+        std::map<std::string, Eigen::VectorXd> joint_positions;     // part_name -> position_vector
+        std::map<std::string, Eigen::VectorXd> joint_velocities;    // part_name -> velocity_vector
+        
+        // Add more parameters (e.g., CartesianTarget) here for extension.
+    };
+
+    /**
+     * @brief Draft of a factory function that constructs a RobotCommandBuilder.
+     */
+    template <typename ModelType>
+    rb::RobotCommandBuilder RBY1_ROS2_DRIVER<ModelType>::create_robot_command(const CommandRecipe& recipe) {
+        rb::ComponentBasedCommandBuilder component_builder;
+        rb::BodyComponentBasedCommandBuilder body_builder;
+
+        if (recipe.command_type == "joint_position") {
+            for (auto const& [part, pos] : recipe.joint_positions) {
+                rb::JointPositionCommandBuilder jpc;
+                jpc.SetMinimumTime(recipe.minimum_time).SetPosition(pos);
+                
+                if (part == "torso") body_builder.SetTorsoCommand(rb::TorsoCommandBuilder(jpc));
+                else if (part == "right_arm") body_builder.SetRightArmCommand(rb::ArmCommandBuilder(jpc));
+                else if (part == "left_arm") body_builder.SetLeftArmCommand(rb::ArmCommandBuilder(jpc));
+                else if (part == "head") component_builder.SetHeadCommand(rb::HeadCommandBuilder(jpc));
+            }
+            component_builder.SetBodyCommand(rb::BodyCommandBuilder(body_builder));
+        }
+        else if (recipe.command_type == "joint_velocity") {
+            // Placeholder: for (auto const& [part, vel] : recipe.joint_velocities) { ... }
+        }
+
+        return rb::RobotCommandBuilder().SetCommand(component_builder);
     }
 
     // Explicit template instantiations

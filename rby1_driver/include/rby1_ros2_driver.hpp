@@ -21,7 +21,16 @@ namespace rby1_ros2{
             RobotJoint robot_joint_;
             RobotState robot_state_;
             rb::RobotInfo info_;
+
             std::shared_ptr<rb::Robot<ModelType>> robot_;
+
+            std::string address;
+            std::string model;
+            std::string joint_topic_name;
+            std::string servo_list_str;
+            std::string power_list_str;
+            bool fault_reset_trigger;
+            bool node_power_off_trigger;
 
             //utility
             std::mutex mutex_;
@@ -31,6 +40,7 @@ namespace rby1_ros2{
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr right_arm_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr left_arm_pub_;
             rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr head_pub_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr wheel_pub_;
 
             rclcpp::Subscription<sensor_msgs::msg::JointState>::SharedPtr position_sub_;
             // Timer for 100Hz publishing
@@ -38,8 +48,8 @@ namespace rby1_ros2{
         public:
             RBY1_ROS2_DRIVER();
             ~RBY1_ROS2_DRIVER();
-            bool power_on(std::vector<int64_t> power_list = {5,12,24,48});
-            bool power_off(std::vector<int64_t> power_list = {5,12,24,48});
+            bool power_on(std::vector<std::string> power_list = {"all"});
+            bool power_off(std::vector<std::string> power_list = {"all"});
             bool servo_on(std::vector<std::string> servo_list = {"all"});
             bool servo_on(std::string servo_name = "all");
             // bool servo_off(std::vector<std::string> servo_list = {"all"});
@@ -49,10 +59,10 @@ namespace rby1_ros2{
             void read_joint_state();
             void position_command(std::string joint_space, std::vector<double> position);
             void position_command_callback(const sensor_msgs::msg::JointState::SharedPtr msg);
+            std::string finish_code_to_string(rb::RobotCommandFeedback::FinishCode code);
         private:
             void init_parameter();
             void resize_joint_states();
-            void categorize_joints();
             void publish_joint_states();        
     };
 }
