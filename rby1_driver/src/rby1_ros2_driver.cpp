@@ -29,6 +29,7 @@ namespace rby1_ros2{
             robot_->SetParameter("cartesian_command.cutoff_frequency", std::to_string(linear_velocity_limit));
             robot_->SetParameter("default.linear_acceleration_limit", std::to_string(acceleration_limit));
 
+            init_joint_states();
 
             // read_joint_state();
             // for (int i = 0; i < robot_state_.joint_torso.position.size(); i++) {
@@ -45,7 +46,7 @@ namespace rby1_ros2{
             // }
             std::this_thread::sleep_for(std::chrono::milliseconds(2000));
             //std::cout << "off" << std::endl;
-            power_off();
+            //power_off();
     }
 
     template <typename ModelType>
@@ -154,7 +155,8 @@ namespace rby1_ros2{
                 servo_list_str += "^head_.*";
             }else if(name == "torso"){
                 servo_list_str += "^torso_.*";
-            }else{
+            }
+            else{
                 servo_list_str += name;
             }
             if (name != servo_list.back()){
@@ -251,40 +253,111 @@ namespace rby1_ros2{
     }
 
     template <typename ModelType>
+    void RBY1_ROS2_DRIVER<ModelType>::init_joint_states(){
+        auto info = robot_->GetRobotInfo();
+
+        robot_state_.joint_torso.name.clear();
+        robot_state_.joint_torso.position.clear();
+        robot_state_.joint_torso.velocity.clear();
+        robot_state_.joint_torso.effort.clear();
+        robot_state_.joint_torso.name.resize(info.torso_joint_idx.size());
+        robot_state_.joint_torso.position.resize(info.torso_joint_idx.size());
+        robot_state_.joint_torso.velocity.resize(info.torso_joint_idx.size());
+        robot_state_.joint_torso.effort.resize(info.torso_joint_idx.size());
+
+        robot_state_.joint_right_arm.name.clear();
+        robot_state_.joint_right_arm.position.clear();
+        robot_state_.joint_right_arm.velocity.clear();
+        robot_state_.joint_right_arm.effort.clear();
+        robot_state_.joint_right_arm.name.resize(info.right_arm_joint_idx.size());
+        robot_state_.joint_right_arm.position.resize(info.right_arm_joint_idx.size());
+        robot_state_.joint_right_arm.velocity.resize(info.right_arm_joint_idx.size());
+        robot_state_.joint_right_arm.effort.resize(info.right_arm_joint_idx.size());
+
+        robot_state_.joint_left_arm.name.clear();
+        robot_state_.joint_left_arm.position.clear();
+        robot_state_.joint_left_arm.velocity.clear();
+        robot_state_.joint_left_arm.effort.clear();
+        robot_state_.joint_left_arm.name.resize(info.left_arm_joint_idx.size());
+        robot_state_.joint_left_arm.position.resize(info.left_arm_joint_idx.size());
+        robot_state_.joint_left_arm.velocity.resize(info.left_arm_joint_idx.size());
+        robot_state_.joint_left_arm.effort.resize(info.left_arm_joint_idx.size());
+
+        robot_state_.joint_head.name.clear();
+        robot_state_.joint_head.position.clear();
+        robot_state_.joint_head.velocity.clear();
+        robot_state_.joint_head.effort.clear();
+        robot_state_.joint_head.name.resize(info.head_joint_idx.size());
+        robot_state_.joint_head.position.resize(info.head_joint_idx.size());
+        robot_state_.joint_head.velocity.resize(info.head_joint_idx.size());
+        robot_state_.joint_head.effort.resize(info.head_joint_idx.size());
+
+        for (size_t i = 0; i < info.torso_joint_idx.size(); ++i) {
+            robot_state_.joint_torso.name[i] = info.joint_infos[info.torso_joint_idx[i]].name;
+        }
+        for (size_t i = 0; i < info.right_arm_joint_idx.size(); ++i) {
+            robot_state_.joint_right_arm.name[i] = info.joint_infos[info.right_arm_joint_idx[i]].name;
+        }
+        for (size_t i = 0; i < info.left_arm_joint_idx.size(); ++i) {
+            robot_state_.joint_left_arm.name[i] = info.joint_infos[info.left_arm_joint_idx[i]].name;
+        }
+        for (size_t i = 0; i < info.head_joint_idx.size(); ++i) {
+            robot_state_.joint_head.name[i] = info.joint_infos[info.head_joint_idx[i]].name;
+        }
+
+        pub_torso_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/torso", 10);
+        pub_right_arm_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/right_arm", 10);
+        pub_left_arm_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/left_arm", 10);
+        pub_head_ = this->create_publisher<sensor_msgs::msg::JointState>(joint_topic_name + "/head", 10);
+        
+        timer_ = this->create_wall_timer(
+            std::chrono::milliseconds(10), 
+            std::bind(&RBY1_ROS2_DRIVER::read_joint_state, this));
+    }
+
+    template <typename ModelType>
     void RBY1_ROS2_DRIVER<ModelType>::read_joint_state(){
         auto state = robot_->GetState();
         auto info = robot_->GetRobotInfo();
-        JointState torso_joint_state;
-        JointState right_arm_joint_state;
-        JointState left_arm_joint_state;
-        JointState head_joint_state;
-        for (int idx : info.torso_joint_idx) {
-            torso_joint_state.position.push_back(state.position[idx]);
-            torso_joint_state.velocity.push_back(state.velocity[idx]);
-            torso_joint_state.effort.push_back(state.torque[idx]);
+        
+        std::lock_guard<std::mutex> lock(mutex_);
+        
+        auto current_time = this->get_clock()->now();
+
+        robot_state_.joint_torso.header.stamp = current_time;
+        robot_state_.joint_right_arm.header.stamp = current_time;
+        robot_state_.joint_left_arm.header.stamp = current_time;
+        robot_state_.joint_head.header.stamp = current_time;
+
+        for (size_t i = 0; i < info.torso_joint_idx.size(); ++i) {
+            int idx = info.torso_joint_idx[i];
+            robot_state_.joint_torso.position[i] = state.position[idx];
+            robot_state_.joint_torso.velocity[i] = state.velocity[idx];
+            robot_state_.joint_torso.effort[i]   = state.torque[idx];
         }
-        for (int idx : info.right_arm_joint_idx) {
-            right_arm_joint_state.position.push_back(state.position[idx]);
-            right_arm_joint_state.velocity.push_back(state.velocity[idx]);
-            right_arm_joint_state.effort.push_back(state.torque[idx]);
+        for (size_t i = 0; i < info.right_arm_joint_idx.size(); ++i) {
+            int idx = info.right_arm_joint_idx[i];
+            robot_state_.joint_right_arm.position[i] = state.position[idx];
+            robot_state_.joint_right_arm.velocity[i] = state.velocity[idx];
+            robot_state_.joint_right_arm.effort[i]   = state.torque[idx];
         }
-        for (int idx : info.left_arm_joint_idx) {
-            left_arm_joint_state.position.push_back(state.position[idx]);
-            left_arm_joint_state.velocity.push_back(state.velocity[idx]);
-            left_arm_joint_state.effort.push_back(state.torque[idx]);
+        for (size_t i = 0; i < info.left_arm_joint_idx.size(); ++i) {
+            int idx = info.left_arm_joint_idx[i];
+            robot_state_.joint_left_arm.position[i] = state.position[idx];
+            robot_state_.joint_left_arm.velocity[i] = state.velocity[idx];
+            robot_state_.joint_left_arm.effort[i]   = state.torque[idx];
         }
-        for (int idx : info.head_joint_idx) {
-            head_joint_state.position.push_back(state.position[idx]);
-            head_joint_state.velocity.push_back(state.velocity[idx]);
-            head_joint_state.effort.push_back(state.torque[idx]);
+        for (size_t i = 0; i < info.head_joint_idx.size(); ++i) {
+            int idx = info.head_joint_idx[i];
+            robot_state_.joint_head.position[i] = state.position[idx];
+            robot_state_.joint_head.velocity[i] = state.velocity[idx];
+            robot_state_.joint_head.effort[i]   = state.torque[idx];
         }
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            robot_state_.joint_torso = torso_joint_state;
-            robot_state_.joint_right_arm = right_arm_joint_state;
-            robot_state_.joint_left_arm = left_arm_joint_state;
-            robot_state_.joint_head = head_joint_state;
-        }
+
+        if (pub_torso_) pub_torso_->publish(robot_state_.joint_torso);
+        if (pub_right_arm_) pub_right_arm_->publish(robot_state_.joint_right_arm);
+        if (pub_left_arm_) pub_left_arm_->publish(robot_state_.joint_left_arm);
+        if (pub_head_) pub_head_->publish(robot_state_.joint_head);
     }
 
     // template <typename ModelType>

@@ -17,30 +17,18 @@ namespace rby1_ros2{
     class RBY1_ROS2_DRIVER : public rclcpp::Node {
         private:
             //robot
-            std::string address;
-            std::string model;
-            std::string power_list_str;
-            std::string servo_list_str;
-            std::string joint_topic_name;
-
-            std::vector<int64_t> power_on_list_;
-            std::vector<std::string> servo_on_list_;
-
-            double minimum_time;
-            double angular_velocity_limit;
-            double linear_velocity_limit;
-            double acceleration_limit;
-            double stop_orientation_tracking_error;
-            double stop_position_tracking_error;
-
-            bool fault_reset_trigger;
-            bool node_power_off_trigger;
-
+            RobotParameter robot_parameter_;
+            RobotJoint robot_joint_;
             RobotState robot_state_;
             std::shared_ptr<rb::Robot<ModelType>> robot_;
 
             //utility
             std::mutex mutex_;
+            rclcpp::TimerBase::SharedPtr timer_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_torso_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_right_arm_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_left_arm_;
+            rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pub_head_;
         public:
             RBY1_ROS2_DRIVER();
             ~RBY1_ROS2_DRIVER();
@@ -58,5 +46,6 @@ namespace rby1_ros2{
 
         private:
             void get_parameters();
+            void init_joint_states();
     };
 }
