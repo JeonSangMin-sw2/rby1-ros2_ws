@@ -208,7 +208,6 @@ namespace rby1_ros2{
         {
             std::lock_guard<std::mutex> lock(mutex_);
             info_ = robot_->GetRobotInfo();
-            //categorize_joints();
             resize_joint_states();
         }
 
@@ -307,7 +306,7 @@ namespace rby1_ros2{
                 }
             };
 
-            fill(robot_joint_.joint_torso,     info_.torso_joint_idx);
+            fill(robot_joint_.joint_torso,      info_.torso_joint_idx);
             fill(robot_joint_.joint_right_arm,  info_.right_arm_joint_idx);
             fill(robot_joint_.joint_left_arm,   info_.left_arm_joint_idx);
             fill(robot_joint_.joint_head,       info_.head_joint_idx);
@@ -451,29 +450,18 @@ namespace rby1_ros2{
         //resize_js(robot_joint_.joint_wheel,      kWheelDOF);
     }
 
-    // =========================================================================
-    // [TEST ONLY - DRAFT] Flexible Command Builder Factory Proposal
-    // These structures demonstrate how to handle various command types efficiently.
-    // To use these, you should move the struct to hpp and add a member function declaration.
-    // =========================================================================
 
     /**
-     * @brief A structure representing a 'Recipe' for a robot command.
+     * @brief 테스트용 함수. 레시피로 저장하고 함수 하나가 그걸 조합해서 커멘드를 짜는 구조
      */
     struct CommandRecipe {
-        std::string command_type; // e.g., "joint_position", "cartesian", "velocity", "jog"
+        std::string command_type; 
         double minimum_time = 2.0;
-        
-        // Data maps for different command flavors
-        std::map<std::string, Eigen::VectorXd> joint_positions;     // part_name -> position_vector
-        std::map<std::string, Eigen::VectorXd> joint_velocities;    // part_name -> velocity_vector
-        
-        // Add more parameters (e.g., CartesianTarget) here for extension.
+
+        std::map<std::string, Eigen::VectorXd> joint_positions;     
+        std::map<std::string, Eigen::VectorXd> joint_velocities;   
     };
 
-    /**
-     * @brief Draft of a factory function that constructs a RobotCommandBuilder.
-     */
     template <typename ModelType>
     rb::RobotCommandBuilder RBY1_ROS2_DRIVER<ModelType>::create_robot_command(const CommandRecipe& recipe) {
         rb::ComponentBasedCommandBuilder component_builder;
@@ -492,7 +480,7 @@ namespace rby1_ros2{
             component_builder.SetBodyCommand(rb::BodyCommandBuilder(body_builder));
         }
         else if (recipe.command_type == "joint_velocity") {
-            // Placeholder: for (auto const& [part, vel] : recipe.joint_velocities) { ... }
+            //예시
         }
 
         return rb::RobotCommandBuilder().SetCommand(component_builder);

@@ -10,7 +10,7 @@ int main(int argc, char *argv[]){
         auto temp_node = std::make_shared<rclcpp::Node>("rby1_ros2_driver");
         temp_node->declare_parameter<std::string>("model", "a");
         temp_node->get_parameter("model", model);
-    } // temp_node goes out of scope and is destroyed, avoiding node name conflicts
+    }
 
     std::shared_ptr<rclcpp::Node> node;
     if (model == "a" || model == "A") {
