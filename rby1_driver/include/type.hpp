@@ -2,12 +2,11 @@
 
 namespace rby1_ros2{
     using JointState = sensor_msgs::msg::JointState;
-    enum State{
+    enum ControlState{
         NONE,
         IDLE,
         ENABLE,
         EXECUTING,
-        SWITCHING,
         MAJOR_FAULT,
         MINOR_FAULT
     };
@@ -17,7 +16,7 @@ namespace rby1_ros2{
         bool is_power_on = false;
         bool is_servo_on = false;
         bool is_ready = false;
-        State state = IDLE;
+        ControlState state = IDLE;
     };
 
     struct RobotJoint{
@@ -31,6 +30,7 @@ namespace rby1_ros2{
     struct RobotParameter{
         std::vector<std::string> power_on_list;
         std::vector<std::string> servo_on_list;
+        double get_state_period;
         double minimum_time;
         double angular_velocity_limit;
         double linear_velocity_limit;

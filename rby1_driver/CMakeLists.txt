@@ -14,7 +14,9 @@ endif()
 # find dependencies
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_action REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(rby1_msgs REQUIRED)
 
 include_directories(/
   ${RBY1_SDK_PATH}/include
@@ -35,7 +37,9 @@ add_executable(rby1_ros2_driver
 
 ament_target_dependencies(rby1_ros2_driver
  rclcpp
+ rclcpp_action
  sensor_msgs
+ rby1_msgs
 )
 
 target_link_directories(rby1_ros2_driver PRIVATE ${RBY1_SDK_PATH}/build/src)
