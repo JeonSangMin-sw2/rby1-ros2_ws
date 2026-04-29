@@ -243,42 +243,10 @@ namespace rby1_ros2{
                 return;
             }
         }
-        // 출력해보기
-        std::cout << "--- Servo On Joints ---" << std::endl;
-        for (const auto& name : servo_on_joints) {
-            std::cout << name << std::endl;
-        }
-        return true;
-    }
-
-    template <typename ModelType>
-    bool RBY1_ROS2_DRIVER<ModelType>::servo_on(std::string servo_name){
-        if(servo_name == "all" || servo_name == ".*"){
-            servo_list_str = ".*";
-        }else if(servo_name == "right"){
-            servo_list_str = "^right_arm_.*";
-        }else if(servo_name == "left"){
-            servo_list_str = "^left_arm_.*";
-        }else if(servo_name == "head"){
-            servo_list_str = "^head_.*";
-        }else if(servo_name == "torso"){
-            servo_list_str = "^torso_.*";
-        }else{
-            servo_list_str = servo_name;
-        }
-        if (!robot_->IsServoOn(servo_list_str) && !robot_->ServoOn(servo_list_str)) return false;
-        
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            info_ = robot_->GetRobotInfo();
-            resize_joint_states();
-        }
-
         auto state = robot_->GetState();
         std::vector<std::string> servo_on_joints;
-        // T::kRobotDOF는 모델의 총 관절 개수를 의미합니다 (보통 info.joint_infos.size()와 동일)
         for (size_t i = 0; i < info_.joint_infos.size(); ++i) {
-            if (state.is_ready[i]) { // 해당 인덱스의 관절이 서보온 상태(ready) 라면
+            if (state.is_ready[i]) {
                 servo_on_joints.push_back(info_.joint_infos[i].name);
             }
         }
@@ -287,8 +255,46 @@ namespace rby1_ros2{
         for (const auto& name : servo_on_joints) {
             std::cout << name << std::endl;
         }
-        return true;
     }
+
+    // template <typename ModelType>
+    // bool RBY1_ROS2_DRIVER<ModelType>::servo_on(std::string servo_name){
+    //     if(servo_name == "all" || servo_name == ".*"){
+    //         servo_list_str = ".*";
+    //     }else if(servo_name == "right"){
+    //         servo_list_str = "^right_arm_.*";
+    //     }else if(servo_name == "left"){
+    //         servo_list_str = "^left_arm_.*";
+    //     }else if(servo_name == "head"){
+    //         servo_list_str = "^head_.*";
+    //     }else if(servo_name == "torso"){
+    //         servo_list_str = "^torso_.*";
+    //     }else{
+    //         servo_list_str = servo_name;
+    //     }
+    //     if (!robot_->IsServoOn(servo_list_str) && !robot_->ServoOn(servo_list_str)) return false;
+        
+    //     {
+    //         std::lock_guard<std::mutex> lock(mutex_);
+    //         info_ = robot_->GetRobotInfo();
+    //         resize_joint_states();
+    //     }
+
+    //     auto state = robot_->GetState();
+    //     std::vector<std::string> servo_on_joints;
+    //     // T::kRobotDOF는 모델의 총 관절 개수를 의미합니다 (보통 info.joint_infos.size()와 동일)
+    //     for (size_t i = 0; i < info_.joint_infos.size(); ++i) {
+    //         if (state.is_ready[i]) { // 해당 인덱스의 관절이 서보온 상태(ready) 라면
+    //             servo_on_joints.push_back(info_.joint_infos[i].name);
+    //         }
+    //     }
+    //     // 출력해보기
+    //     std::cout << "--- Servo On Joints ---" << std::endl;
+    //     for (const auto& name : servo_on_joints) {
+    //         std::cout << name << std::endl;
+    //     }
+    //     return true;
+    // }
 
     template <typename ModelType>
     bool RBY1_ROS2_DRIVER<ModelType>::check_controll_manager(){
@@ -703,37 +709,37 @@ namespace rby1_ros2{
     /**
      * @brief 테스트용 함수. 레시피로 저장하고 함수 하나가 그걸 조합해서 커멘드를 짜는 구조
      */
-    struct CommandRecipe {
-        std::string command_type; 
-        double minimum_time = 2.0;
+    // struct CommandRecipe {
+    //     std::string command_type; 
+    //     double minimum_time = 2.0;
 
-        std::map<std::string, Eigen::VectorXd> joint_positions;     
-        std::map<std::string, Eigen::VectorXd> joint_velocities;   
-    };
+    //     std::map<std::string, Eigen::VectorXd> joint_positions;     
+    //     std::map<std::string, Eigen::VectorXd> joint_velocities;   
+    // };
 
-    template <typename ModelType>
-    rb::RobotCommandBuilder RBY1_ROS2_DRIVER<ModelType>::create_robot_command(const CommandRecipe& recipe) {
-        rb::ComponentBasedCommandBuilder component_builder;
-        rb::BodyComponentBasedCommandBuilder body_builder;
+    // template <typename ModelType>
+    // rb::RobotCommandBuilder RBY1_ROS2_DRIVER<ModelType>::create_robot_command(const CommandRecipe& recipe) {
+    //     rb::ComponentBasedCommandBuilder component_builder;
+    //     rb::BodyComponentBasedCommandBuilder body_builder;
 
-        if (recipe.command_type == "joint_position") {
-            for (auto const& [part, pos] : recipe.joint_positions) {
-                rb::JointPositionCommandBuilder jpc;
-                jpc.SetMinimumTime(recipe.minimum_time).SetPosition(pos);
+    //     if (recipe.command_type == "joint_position") {
+    //         for (auto const& [part, pos] : recipe.joint_positions) {
+    //             rb::JointPositionCommandBuilder jpc;
+    //             jpc.SetMinimumTime(recipe.minimum_time).SetPosition(pos);
                 
-                if (part == "torso") body_builder.SetTorsoCommand(rb::TorsoCommandBuilder(jpc));
-                else if (part == "right_arm") body_builder.SetRightArmCommand(rb::ArmCommandBuilder(jpc));
-                else if (part == "left_arm") body_builder.SetLeftArmCommand(rb::ArmCommandBuilder(jpc));
-                else if (part == "head") component_builder.SetHeadCommand(rb::HeadCommandBuilder(jpc));
-            }
-            component_builder.SetBodyCommand(rb::BodyCommandBuilder(body_builder));
-        }
-        else if (recipe.command_type == "joint_velocity") {
-            //예시
-        }
+    //             if (part == "torso") body_builder.SetTorsoCommand(rb::TorsoCommandBuilder(jpc));
+    //             else if (part == "right_arm") body_builder.SetRightArmCommand(rb::ArmCommandBuilder(jpc));
+    //             else if (part == "left_arm") body_builder.SetLeftArmCommand(rb::ArmCommandBuilder(jpc));
+    //             else if (part == "head") component_builder.SetHeadCommand(rb::HeadCommandBuilder(jpc));
+    //         }
+    //         component_builder.SetBodyCommand(rb::BodyCommandBuilder(body_builder));
+    //     }
+    //     else if (recipe.command_type == "joint_velocity") {
+    //         //예시
+    //     }
 
-        return rb::RobotCommandBuilder().SetCommand(component_builder);
-    }
+    //     return rb::RobotCommandBuilder().SetCommand(component_builder);
+    // }
 
     // Explicit template instantiations
     template class RBY1_ROS2_DRIVER<rb::y1_model::A>;
